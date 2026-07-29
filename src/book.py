@@ -113,6 +113,7 @@ class Book:
                 spread = self._update_spread(order)
                 if spread:
                     print(f"Updated spread on {order.asset} -> {spread}")
+                self.set_last_traded_price(order.asset, order.price)
                 return
 
             self.execute_trade(order, match)
@@ -131,9 +132,9 @@ class Book:
         self.book[order_type].append(order)
         return -1
 
-    # returns the index of resting order that fulfills this trade
+    # returns the index of resting order that fulfills this trade fully or partially
     def _find_match(self, order: Order) -> int | None:
-        _, price, _, order_type, _, _ = order
+        _, price, asset, order_type, _, _ = order
 
         if order_type == "Ask":
             match_pool = self.book.get("Bid")
@@ -141,25 +142,29 @@ class Book:
             match_pool = self.book.get("Ask")
 
         for resting_indx, resting_order in enumerate(match_pool):
-            if resting_order.price <= price:
+            # TODO: wrong
+            if resting_order.asset == asset and resting_order.price <= price:
                 return resting_indx
 
         return None
 
     # Performs the trade and handles quantity adjustment/removal of old /appending 
-    def execute_trade(self, buyer: Order, seller: Order):
-        asset = buyer.asset
-
-        if buyer.order_id <= seller.order_id:
-            price = buyer.price
+    def execute_trade(self, order: Order, matched_order_indx: int):
+        quantity, price, asset, order_type = order
+        
+        if order_type == "Ask":
+            match_pool = self.book.get("Bid")
         else:
-            price = seller.price
-
-        # executes the trade at "price"
-        # new_buyer = buyer after trade (quantity mutated)
-        # new_seller = seller after trade (quantity mutated)
-        self._update_book([new_buyer, new_seller])
-        self._update_last_traded_price(asset, price)
+            match_pool = self.book.get("Ask")
+        
+        matched_order = match_pool[matched_order_indx]
+        matched_quantity, matched_price, _, _ = matched_order
+        if matched_quantity == quantity:
+            match_pool.pop(matched_order_indx)
+            #self._update_spread(order)
+            self.set_last_traded_price(asset, )
+            
+        
         pass
 
     def _update_book(self, orders: list[Order]) -> None:
@@ -181,7 +186,9 @@ class Book:
             
             spread = self._calculate_spread(best_order.price, best_order_on_other_side.price)
             self.set_spread(asset, spread)
-            self.set_last_traded_price(asset, price)
+            return spread
+        
+        return None
 
     def _calculate_spread(self, price1, price2):
         return math.abs(price1 - price2)
