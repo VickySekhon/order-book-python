@@ -1,16 +1,17 @@
+import math
 from typing import Literal, Sequence
 from collections import defaultdict
 from datetime import datetime
 from dataclasses import dataclass, field
 
-
+# Global price tracker
 assets = {
-    "AAPL": {"price": 291, "spread": 0},
-    "AMZN": {"price": 238, "spread": 0},
-    "GOOGL": {"price": 359, "spread": 0},
-    "MSFT": {"price": 390, "spread": 0},
-    "NVDA": {"price": 205, "spread": 0},
-    "TSLA": {"price": 406, "spread": 0},
+    "AAPL": {"price": 291, "spread": float('inf')},
+    "AMZN": {"price": 238, "spread": float('inf')},
+    "GOOGL":{"price": 359, "spread": float('inf')},
+    "MSFT": {"price": 390, "spread": float('inf')},
+    "NVDA": {"price": 205, "spread": float('inf')},
+    "TSLA": {"price": 406, "spread": float('inf')},
 }
 
 TRADABLE_ASSETS = assets.keys()
@@ -20,6 +21,7 @@ Universe = Literal["AAPL", "AMZN", "GOOGL", "MSFT", "NVDA", "TSLA"]
 OrderType = Literal["Bid", "Ask"]
 
 order_id = 1
+
 
 @dataclass
 class Order:
@@ -34,7 +36,7 @@ class Order:
         """Validate order parameters and assign order_id"""
         if self.quantity <= 0:
             raise ValueError("Quantity cannot be negative.")
-            
+
         if self.price <= 0:
             raise ValueError("Price cannot be negative.")
 
@@ -59,32 +61,40 @@ class Order:
     def __str__(self):
         return f"""Quantity: {self.quantity}\nPrice: {self.price}\nAsset: {self.asset}\nOrder Type: {self.order_type}\nOrder ID: {self.order_id}\nTime Submitted: {self.submission_time}\n"""
 
+
 class Book:
     def __init__(self):
-        self.book: dict[OrderType, list[Order]] = {}
+        self._book: dict[OrderType, list[Order]] = {"Bid": [], "Ask": []}
         """ 
         self.book = {
-            "asks": [
+            "Ask": [
                     Order(quantity, price, asset, order_type, submission_time, order_id),
-                
-                ^ ordered by price increasing
-                ]
-            },
-            "bids": [
-                ^ ordered by price decreasing
+                    ^
+                    | ordered by price increasing
+            ],
+            "Bid": [
+                    Order(quantity, price, asset, order_type, submission_time, order_id),
+                    |
+                    V ordered by price decreasing
             ]
         }
         """
 
-        # Tracks prices
-        self.assets = assets
-
         # # Tracks volume
         # self.volume
+        
+    @property
+    def book(self):
+        return self._book
 
     @property
     def length(self):
-        return len(self.book["Bid"]), len(self.book["Ask"]) 
+        return len(self.book.get("Bid")), len(self.book.get("Ask"))
+    
+    @book.setter
+    def book(self, value):
+        raise AttributeError("Book cannot be reassigned manually, instead mutate it by calling submit_order().")
+
     """ 
     A newly submitted order can clear multiple orders.
     
@@ -94,71 +104,57 @@ class Book:
 
     def submit_order(self, order: Order):
         while order.quantity > 0:
-            
+
             match = self._find_match(order)
-            
+
             if not match:
-                self.add_order(order)
-                
-                order_type = order.order_type
-                self._calculate_spread(order)
+                # TODO: do we need the index anywhere?
+                insertion_indx = self.add_order(order)
+                spread = self._update_spread(order)
+                if spread:
+                    print(f"Updated spread on {order.asset} -> {spread}")
                 return
 
-            buyer_indx, seller_indx = match
-            buyer, seller = self.book[buyer_indx], self.book[seller_indx]
-            self._execute_trade(buyer, seller)
+            self.execute_trade(order, match)
 
-    # performs insertion sort
+    # performs insertion sort and returns index where inserted
     def add_order(self, order: Order) -> None | Exception:
-        try:
-            order_type = order.order_type
-            order_price = order.price
-            
-            pos = 0
-            for i, pending_order in enumerate(self.book[order_type]):
-                if order_type == "Bid":
-                    if order_price >= pending_order.price:
-                        pos = i
-                else:
-                    if order_price <= pending_order.price:
-                        pos = i
-            
-            self.book[order_type].insert(pos, order)
-        except Exception as e:
-            raise e
-        # if order_type == "Bid":
-        #      pos = 0
-        #      for i, pending_order in enumerate(self.book["Bid"]):
-        #         if order_price >= pending_order.price:
-        #             pos = i
-        # else:
-        #     pass
-        return
+        _, price, _, order_type = order
 
-    # returns the indexes of the buyer and seller, none if no match
-    def _find_match(self, order: Order) -> tuple[int, int] | None:
-        # matches order based on limit buy/sell
-        # bid -> matches with earliest ask with ask <= bid
-        # ask -> matches with earliest bid with bid >= ask
-        
-        quantity, price, asset, order_type, submission_time = order
-        asks = [posted_order for posted_order in self.book if posted_order.fulfilled == False and posted_order.order_type == "Ask"]
-        bids = [posted_order for posted_order in self.book if posted_order.fulfilled == False and posted_order.order_type == "Bid"]
-        if order_type == "Bid":
-            for current_order in asks:
-                pass
+        for pos, resting_order in enumerate(self.book.get(order_type)):
+            if (order_type == "Bid" and price >= resting_order.price) or (
+                order_type == "Ask" and price <= resting_order.price
+            ):
+                self.book[order_type].insert(pos, order)
+                return pos
+
+        self.book[order_type].append(order)
+        return -1
+
+    # returns the index of resting order that fulfills this trade
+    def _find_match(self, order: Order) -> int | None:
+        _, price, _, order_type, _, _ = order
+
+        if order_type == "Ask":
+            match_pool = self.book.get("Bid")
         else:
-            for current_order in bids:
-                pass
+            match_pool = self.book.get("Ask")
 
-    def _execute_trade(self, buyer: Order, seller: Order):
+        for resting_indx, resting_order in enumerate(match_pool):
+            if resting_order.price <= price:
+                return resting_indx
+
+        return None
+
+    # Performs the trade and handles quantity adjustment/removal of old /appending 
+    def execute_trade(self, buyer: Order, seller: Order):
         asset = buyer.asset
-        
+
         if buyer.order_id <= seller.order_id:
             price = buyer.price
         else:
             price = seller.price
-        
+
         # executes the trade at "price"
         # new_buyer = buyer after trade (quantity mutated)
         # new_seller = seller after trade (quantity mutated)
@@ -169,29 +165,32 @@ class Book:
     def _update_book(self, orders: list[Order]) -> None:
         pass
 
-    def _calculate_spread(self, order: Order) -> float:
-        asset = order.asset
+    def _update_spread(self, order: Order) -> float:
+        _, price, asset, order_type, _, _ = order
+        best_order = self.book.get(order_type)[0]
         
-        recent_order = self.book.get(asset)[-1]
-        # current_spread = self.assets.get(asset).get("spread")
-        # orders_of_this_asset: list[Order] = [order for order in self.book if order.asset == asset]
-        
-        # if not orders_of_this_asset or ...:
-        #     return
-        # bids = sorted([order for order in orders_of_this_asset if order.order_type == "Bid"], key=lambda x : x.price, reverse=True)
-        # asks = sorted([order for order in orders_of_this_asset if order.order_type == "Ask"], key=lambda x : x.price)
-        
-        # lowest_ask = asks[0]
-        # highest_bid = bids[0]
-        
-        # if lowest_ask - highest_bid == current_spread:
-        #     print(f"Spread is unchanged for asset: {asset}")
-        #     return
-        
-        # return lowest_ask - highest_bid
+        # This is the only condition where spread needs recomputation
+        if best_order is order:
+            # find the best order on the other side
+            if order_type == "Ask":
+                sorted_by_asset = sorted(self.book.get("Bid"), key=lambda pending_order : pending_order.asset == asset)
+                best_order_on_other_side = sorted_by_asset[0]
+            else:
+                sorted_by_asset = sorted(self.book.get("Ask"), key=lambda pending_order : pending_order.asset == asset)
+                best_order_on_other_side = sorted_by_asset[0]
+            
+            spread = self._calculate_spread(best_order.price, best_order_on_other_side.price)
+            self.set_spread(asset, spread)
+            self.set_last_traded_price(asset, price)
 
-    def _update_last_traded_price(self, asset: Universe, price: float) -> None:
-        self.assets["asset"]["price"] = price
+    def _calculate_spread(self, price1, price2):
+        return math.abs(price1 - price2)
+
+    def set_spread(self, asset: Universe, spread: float) -> None:
+        assets[asset]["spread"] = spread
         
+    def set_last_traded_price(self, asset: Universe, price: float) -> None:
+        assets[asset]["price"] = price
+
     def __str__(self):
         return ""
