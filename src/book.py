@@ -21,7 +21,7 @@ VALID_ORDERS = ("Bid", "Ask")
 Universe = Literal["AAPL", "AMZN", "GOOGL", "MSFT", "NVDA", "TSLA"]
 OrderType = Literal["Bid", "Ask"]
 
-order_id = 1
+id = 1
 
 
 @dataclass
@@ -29,14 +29,14 @@ class Order:
     quantity: int
     price: float
     asset: Universe
-    order_type: OrderType
+    type: OrderType
     submission_time: datetime = field(default_factory=datetime.now)
-    order_id: int = field(default=0, init=False)
+    id: int = field(default=0, init=False)
 
     def __post_init__(self):
-        """Validate order parameters and assign order_id"""
+        """Validate order parameters and assign id"""
         if self.quantity <= 0:
-            raise ValueError("Quantity cannot be negative.")
+            raise ValueError("Quantity cannot be negative or zero.")
 
         if self.price <= 0:
             raise ValueError("Price cannot be negative.")
@@ -46,21 +46,21 @@ class Order:
                 f"Cannot trade asset: {self.asset}. Tradable assets: {list(TRADABLE_ASSETS)}"
             )
 
-        if self.order_type not in VALID_ORDERS:
+        if self.type not in VALID_ORDERS:
             raise ValueError(
-                f"Invalid order: {self.order_type}. Orders can only be: {list(VALID_ORDERS)}"
+                f"Invalid order: {self.type}. Orders can only be: {list(VALID_ORDERS)}"
             )
 
-        global order_id
-        self.order_id = order_id
-        order_id += 1
+        global id
+        self.id = id
+        id += 1
 
     def __iter__(self):
-        """Allow unpacking of order: quantity, price, asset, order_type = order"""
-        return iter([self.quantity, self.price, self.asset, self.order_type])
+        """Allow unpacking of order: quantity, price, asset, type = order"""
+        return iter([self.quantity, self.price, self.asset, self.type])
 
     def __str__(self):
-        return f"""Quantity: {self.quantity}\nPrice: {self.price}\nAsset: {self.asset}\nOrder Type: {self.order_type}\nOrder ID: {self.order_id}\nTime Submitted: {self.submission_time}\n"""
+        return f"""Quantity: {self.quantity}\nPrice: {self.price}\nAsset: {self.asset}\nOrder Type: {self.type}\nOrder ID: {self.id}\nTime Submitted: {self.submission_time}\n\n"""
 
 
 class Book:
@@ -69,27 +69,21 @@ class Book:
         """ 
         self.book = {
             "Ask": [
-                    Order(quantity, price, asset, order_type, submission_time, order_id),
+                    Order(quantity, price, asset, type, submission_time, id),
                     ^
                     | ordered by price increasing
             ],
             "Bid": [
-                    Order(quantity, price, asset, order_type, submission_time, order_id),
+                    Order(quantity, price, asset, type, submission_time, id),
                     |
                     V ordered by price decreasing
             ]
         }
         """
-
-        # # Tracks volume
-        # self.volume
         
     @property
     def book(self):
         return self._book
-    
-    def get(self, key):
-        return self._book.get(key)
 
     @property
     def length(self):
@@ -98,6 +92,9 @@ class Book:
     @book.setter
     def book(self, value):
         raise AttributeError("Book cannot be reassigned manually, instead mutate it by calling submit_order().")
+    
+    def get(self, key):
+        return self._book.get(key)
 
     """ 
     A newly submitted order can clear multiple orders.
@@ -112,7 +109,7 @@ class Book:
             match_indx = self._find_match(order)
 
             if match_indx is None:
-                if self._order_exists(order.order_type, order.order_id):
+                if self._order_exists(order.type, order.id):
                     return
                 
                 self.add_order(order)
@@ -125,23 +122,23 @@ class Book:
 
     # performs insertion sort and returns index where inserted
     def add_order(self, order: Order) -> None | Exception:
-        _, price, _, order_type = order
+        _, price, _, type = order
 
-        for pos, resting_order in enumerate(self.book.get(order_type)):
-            if (order_type == "Bid" and price >= resting_order.price) or (
-                order_type == "Ask" and price <= resting_order.price
+        for pos, resting_order in enumerate(self.book.get(type)):
+            if (type == "Bid" and price >= resting_order.price) or (
+                type == "Ask" and price <= resting_order.price
             ):
-                self.book[order_type].insert(pos, order)
+                self.book[type].insert(pos, order)
                 return pos
 
-        self.book[order_type].append(order)
+        self.book[type].append(order)
         return -1
 
     # returns the index of resting order that fulfills this trade fully or partially
     def _find_match(self, order: Order) -> int | None:
-        _, price, asset, order_type = order
+        _, price, asset, type = order
 
-        if order_type == "Ask":
+        if type == "Ask":
             for indx, resting_bid in enumerate(self.book.get("Bid")):
                 if resting_bid.asset == asset and price <= resting_bid.price:
                     return indx
@@ -160,9 +157,9 @@ class Book:
 
     # Performs the trade and handles quantity adjustment/removal of old /appending 
     def execute_trade(self, order: Order, match_indx: int):
-        quantity, price, asset, order_type = order
+        quantity, price, asset, type = order
         
-        if order_type == "Ask":
+        if type == "Ask":
             match_pool = self.book.get("Bid")
         else:
             match_pool = self.book.get("Ask")
@@ -180,23 +177,23 @@ class Book:
             match_pool.pop(match_indx)
             updated_quantity = quantity - matched_quantity
             order.quantity = updated_quantity
-            if not self._order_exists(order_type, order.order_id):
+            if not self._order_exists(type, order.id):
                 self.add_order(order)
         self._update_spread(asset)
         self.set_last_traded_price(asset, matched_price)
         self.log_updates(order, matched_order)
     
     def log_updates(self, order, matched_order):
-        print(f"---------------------------------------------\nMatched order_id {order.order_id} to order_id {matched_order.order_id} at ${matched_order.price}")
+        print(f"---------------------------------------------\nMatched id {order.id} to id {matched_order.id} at ${matched_order.price}")
         asset_names = list(assets.keys())
         prices = [assets[asset]["price"] for asset in assets]
         spreads = [assets[asset]["spread"] for asset in assets]
         print(f"Updated Universe:")
         print(tabulate([["Asset", "Last Traded Price", "Spread (Highest Bid <-> Lowest Ask)"], [asset_names, prices, spreads]]))
         
-    def _order_exists(self, order_type: OrderType, order_id: int) -> bool:
-        for order in self.book.get(order_type):
-            if order.order_id == order_id:
+    def _order_exists(self, type: OrderType, id: int) -> bool:
+        for order in self.book.get(type):
+            if order.id == id:
                 return True
         return False
 
@@ -241,10 +238,16 @@ def main():
     # fulfilled orders
     # 1) quantity is the same
     book.submit_order(Order(1,310, "AAPL", "Bid"))
-    print(book)
+    #print(book)
     # 2) quantity > resting order quantity
     book.submit_order(Order(4,200, "GOOGL", "Ask"))
     print(book)
+    # 3) quantity < resting_order quantity
+    book.submit_order(Order(4,300, "AMZN", "Ask"))
+    print(book)
+    book.submit_order(Order(3,310, "AMZN", "Bid"))
+    print(book)
+    
     
     return
 
